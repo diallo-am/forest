@@ -1,0 +1,456 @@
+{% extends "base.html" %}
+
+{% block title %}Gestion des Utilisateurs{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Gestion des Utilisateurs</h1>
+        <p class="text-muted">Gérer les comptes et permissions du système</p>
+    </div>
+    <button class="btn btn-primary" id="btnAddUser" onclick="openAddUserModal()">
+        + Nouvel Utilisateur
+    </button>
+</div>
+
+<!-- Alert Messages -->
+<div id="alertContainer"></div>
+
+<!-- Filters -->
+<div class="filters">
+    <div class="form-group" style="margin-bottom: 0;">
+        <input type="text" id="searchInput" placeholder="🔍 Rechercher un utilisateur..." style="min-width: 300px;">
+    </div>
+    <div class="form-group" style="margin-bottom: 0;">
+        <select id="filterRole" onchange="applyFilters()">
+            <option value="">Tous les rôles</option>
+            <option value="admin">Administrateur</option>
+            <option value="user">Utilisateur</option>
+            <option value="readonly">Lecture seule</option>
+        </select>
+    </div>
+    <div class="form-group" style="margin-bottom: 0;">
+        <select id="filterStatus" onchange="applyFilters()">
+            <option value="">Tous les statuts</option>
+            <option value="1">Actifs</option>
+            <option value="0">Inactifs</option>
+        </select>
+    </div>
+</div>
+
+<!-- Users Cards Grid -->
+<div class="cards-grid" id="usersContainer">
+    <div class="card">
+        <div class="card-body text-center">
+            <p>Chargement des utilisateurs...</p>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Add/Edit User -->
+<div id="userModal" class="modal">
+    <div class="modal-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 id="modalTitle">Nouvel Utilisateur</h2>
+            <span class="close" onclick="closeUserModal()">&times;</span>
+        </div>
+
+        <form id="userForm">
+            <input type="hidden" id="userId">
+
+            <div class="form-group">
+                <label for="username">Username *</label>
+                <input type="text" id="username" required maxlength="50" placeholder="Identifiant unique">
+                <small>Identifiant de connexion (alphanumérique, sans espaces)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email *</label>
+                <input type="email" id="email" required placeholder="utilisateur@example.com">
+                <small>Adresse email pour les notifications d'alertes</small>
+            </div>
+
+            <div class="form-group" id="passwordGroup">
+                <label for="password">Mot de passe *</label>
+                <input type="password" id="password" required minlength="6" placeholder="Minimum 6 caractères">
+                <small>Le mot de passe sera hashé en base de données</small>
+            </div>
+
+            <div class="form-group">
+                <label for="role">Rôle *</label>
+                <select id="role" required>
+                    <option value="readonly">Lecture Seule</option>
+                    <option value="user">Utilisateur</option>
+                    <option value="admin">Administrateur</option>
+                </select>
+                <small>
+                    <strong>Lecture Seule:</strong> Consultation uniquement • 
+                    <strong>Utilisateur:</strong> Gestion capteurs/nœuds/alertes • 
+                    <strong>Admin:</strong> Accès complet
+                </small>
+            </div>
+
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="closeUserModal()">Annuler</button>
+                <button type="submit" class="btn btn-primary">Enregistrer</button>
+            </div>
+        </form>
+
+        <div id="apiKeyDisplay" style="display: none;">
+            <div style="background: #d4edda; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; color: #155724;">
+                <strong>✓ Utilisateur créé avec succès !</strong>
+            </div>
+            <div class="api-key-display">
+                <strong>Token API:</strong>
+                <div class="api-key-box">
+                    <code id="apiKeyValue"></code>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="copyApiKey()">Copier</button>
+                </div>
+            </div>
+            <div style="background: #fff3cd; padding: 0.75rem; border-radius: 6px; margin-top: 1rem; font-size: 0.9rem; color: #856404;">
+                ⚠ <strong>Important:</strong> Copiez ce token maintenant, il ne sera plus visible après fermeture de cette fenêtre.
+            </div>
+            <button type="button" class="btn btn-primary" onclick="closeUserModal()" style="margin-top: 1rem;">Fermer</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentUser = null;
+    let allUsers = [];
+    let filteredUsers = [];
+
+    // Permissions par rôle
+    const rolePermissions = {
+        readonly: [
+            'Consulter les capteurs et leurs données',
+            'Consulter les mesures historiques',
+            'Consulter les alertes configurées',
+            'Accéder au dashboard de monitoring'
+        ],
+        user: [
+            'Toutes les permissions de "Lecture Seule"',
+            'Créer et modifier des capteurs',
+            'Créer et modifier des nœuds IoT',
+            'Configurer des alertes personnalisées',
+            'Enregistrer des mesures via API'
+        ],
+        admin: [
+            'Toutes les permissions de "Utilisateur"',
+            'Créer, modifier et supprimer des utilisateurs',
+            'Supprimer des capteurs et nœuds',
+            'Accéder aux logs système détaillés',
+            'Configuration complète du système'
+        ]
+    };
+
+    // Initialisation
+    document.addEventListener('DOMContentLoaded', function() {
+        checkAuthUser();
+        loadUsers();
+        setupSearch();
+    });
+
+    // Vérifier l'authentification
+    function checkAuthUser() {
+        const token = localStorage.getItem('iot_token');
+        const user = JSON.parse(localStorage.getItem('iot_user') || '{}');
+
+        if (!token) {
+            window.location.href = '/';
+            return;
+        }
+
+        currentUser = user;
+
+        // Vérifier les permissions
+        if (user.role !== 'admin') {
+            document.getElementById('btnAddUser').disabled = true;
+            document.getElementById('btnAddUser').style.opacity = '0.5';
+            document.getElementById('btnAddUser').style.cursor = 'not-allowed';
+            showAlert('Vous n\'avez pas les permissions pour gérer les utilisateurs. Seuls les administrateurs peuvent créer ou modifier des comptes.', 'warning');
+        }
+    }
+
+    // Charger tous les utilisateurs
+    async function loadUsers() {
+        try {
+            const token = localStorage.getItem('iot_token');
+            const response = await fetch(`${API_URL}/utilisateurs`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!response.ok) {
+                if (response.status === 403) {
+                    throw new Error('Accès refusé: permissions insuffisantes');
+                }
+                throw new Error('Erreur lors du chargement');
+            }
+
+            allUsers = await response.json();
+            filteredUsers = [...allUsers];
+            displayUsers();
+
+        } catch (error) {
+            console.error('Erreur:', error);
+            showAlert(error.message, 'danger');
+            document.getElementById('usersContainer').innerHTML = `
+                <div class="card">
+                    <div class="card-body text-center">
+                        <p style="color: var(--danger-color);">× ${error.message}</p>
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    // Afficher les utilisateurs dans des cartes
+    function displayUsers() {
+        const container = document.getElementById('usersContainer');
+
+        if (filteredUsers.length === 0) {
+            container.innerHTML = `
+                <div class="card">
+                    <div class="card-body text-center">
+                        <p>Aucun utilisateur trouvé</p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = filteredUsers.map(user => {
+            const roleClass = user.role === 'admin' ? 'danger' : user.role === 'user' ? 'info' : 'inactive';
+            const roleIcon = user.role === 'admin' ? '●' : user.role === 'user' ? '●' : '●';
+            const statusBadge = user.actif ? 
+                '<span class="badge badge-success">✓ Actif</span>' : 
+                '<span class="badge badge-danger">✗ Inactif</span>';
+            
+            const lastLogin = user.derniere_connexion ? 
+                new Date(user.derniere_connexion).toLocaleString('fr-FR') : 
+                'Jamais connecté';
+
+            const canModify = currentUser.role === 'admin';
+            const isSelf = user.id === currentUser.id;
+
+            return `
+                <div class="card">
+                    <div class="card-header">
+                        <h3>${roleIcon} ${user.username}</h3>
+                        ${statusBadge}
+                    </div>
+                    <div class="card-body">
+                        <p><strong>ID:</strong> #${user.id}</p>
+                        <p><strong>Email:</strong> ${user.email}</p>
+                        <p><strong>Rôle:</strong> <span class="badge badge-${roleClass}">${user.role.toUpperCase()}</span></p>
+                        <p><strong>Créé le:</strong> ${new Date(user.date_creation).toLocaleDateString('fr-FR')}</p>
+                        <p><strong>Dernière connexion:</strong> ${lastLogin}</p>
+                    </div>
+                    ${canModify ? `
+                    <div class="card-footer">
+                        ${user.actif ? 
+                            `<button class="btn btn-sm btn-danger" onclick="toggleUserStatus(${user.id}, false, '${user.username}')">Désactiver</button>` :
+                            `<button class="btn btn-sm btn-info" onclick="toggleUserStatus(${user.id}, true, '${user.username}')">Activer</button>`
+                        }
+                        ${!isSelf ? 
+                            `<button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id}, '${user.username}')">Supprimer</button>` :
+                            ''
+                        }
+                    </div>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Filtres et recherche
+    function setupSearch() {
+        document.getElementById('searchInput').addEventListener('input', applyFilters);
+    }
+
+    function applyFilters() {
+        const search = document.getElementById('searchInput').value.toLowerCase();
+        const roleFilter = document.getElementById('filterRole').value;
+        const statusFilter = document.getElementById('filterStatus').value;
+
+        filteredUsers = allUsers.filter(user => {
+            const matchSearch = user.username.toLowerCase().includes(search) ||
+                              user.email.toLowerCase().includes(search);
+            const matchRole = !roleFilter || user.role === roleFilter;
+            const matchStatus = statusFilter === '' || user.actif === (statusFilter === '1');
+
+            return matchSearch && matchRole && matchStatus;
+        });
+
+        displayUsers();
+    }
+
+    // Ouvrir modal ajout
+    function openAddUserModal() {
+        if (currentUser.role !== 'admin') {
+            showAlert('Vous n\'avez pas les permissions requises', 'danger');
+            return;
+        }
+
+        document.getElementById('modalTitle').textContent = 'Nouvel Utilisateur';
+        document.getElementById('userForm').reset();
+        document.getElementById('userId').value = '';
+        document.getElementById('passwordGroup').style.display = 'block';
+        document.getElementById('password').required = true;
+        document.getElementById('apiKeyDisplay').style.display = 'none';
+        document.getElementById('userForm').style.display = 'block';
+        document.getElementById('userModal').style.display = 'flex';
+    }
+
+    // Fermer modal
+    function closeUserModal() {
+        document.getElementById('userModal').style.display = 'none';
+    }
+
+    // Soumettre formulaire
+    document.getElementById('userForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const userData = {
+            username: document.getElementById('username').value.trim(),
+            email: document.getElementById('email').value.trim(),
+            password: document.getElementById('password').value,
+            role: document.getElementById('role').value
+        };
+
+        // Validation côté client
+        if (!/^[a-zA-Z0-9_-]+$/.test(userData.username)) {
+            showAlert('Le username ne peut contenir que des lettres, chiffres, tirets et underscores', 'danger');
+            return;
+        }
+
+        try {
+            const token = localStorage.getItem('iot_token');
+            const response = await fetch(`${API_URL}/auth/register`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(userData)
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Erreur lors de la création');
+            }
+
+            // Afficher le token API
+            document.getElementById('userForm').style.display = 'none';
+            document.getElementById('apiKeyDisplay').style.display = 'block';
+            document.getElementById('apiKeyValue').textContent = data.api_token;
+
+            showAlert(`✓ Utilisateur "${userData.username}" créé avec succès!`, 'success');
+            loadUsers();
+
+        } catch (error) {
+            showAlert(error.message, 'danger');
+        }
+    });
+
+    // Copier le token API
+    function copyApiKey() {
+        const apiKey = document.getElementById('apiKeyValue').textContent;
+        navigator.clipboard.writeText(apiKey).then(() => {
+            showAlert('Token API copié dans le presse-papier!', 'success');
+        }).catch(err => {
+            showAlert('Erreur lors de la copie', 'danger');
+        });
+    }
+
+    // Activer/Désactiver utilisateur
+    async function toggleUserStatus(userId, activate, username) {
+        const action = activate ? 'activer' : 'désactiver';
+        if (!confirm(`Voulez-vous vraiment ${action} l'utilisateur "${username}"?`)) {
+            return;
+        }
+
+        try {
+            const token = localStorage.getItem('iot_token');
+            const response = await fetch(`${API_URL}/utilisateurs/${userId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ actif: activate })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Erreur modification');
+            }
+
+            showAlert(`✓ Utilisateur "${username}" ${activate ? 'activé' : 'désactivé'} avec succès`, 'success');
+            loadUsers();
+
+        } catch (error) {
+            showAlert(error.message, 'danger');
+        }
+    }
+
+    // Supprimer utilisateur
+    async function deleteUser(userId, username) {
+        if (!confirm(`ATTENTION: Êtes-vous sûr de vouloir supprimer l'utilisateur "${username}"?\n\nCette action est IRRÉVERSIBLE et supprimera:\n- Le compte utilisateur\n- Son token API\n- Tous ses logs\n\nTaper "DELETE" pour confirmer.`)) {
+            return;
+        }
+
+        const confirmation = prompt(`Pour confirmer, tapez exactement: ${username}`);
+        if (confirmation !== username) {
+            showAlert('Suppression annulée: nom incorrect', 'info');
+            return;
+        }
+
+        try {
+            const token = localStorage.getItem('iot_token');
+            const response = await fetch(`${API_URL}/utilisateurs/${userId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Erreur suppression');
+            }
+
+            showAlert(`✓ Utilisateur "${username}" supprimé avec succès`, 'success');
+            loadUsers();
+
+        } catch (error) {
+            showAlert(error.message, 'danger');
+        }
+    }
+
+    // Afficher alerte
+    function showAlert(message, type) {
+        const container = document.getElementById('alertContainer');
+        const alertClass = type === 'success' ? 'badge-success' : 
+                          type === 'danger' ? 'badge-danger' : 
+                          type === 'warning' ? 'badge-warning' : 'badge-info';
+        
+        const alert = document.createElement('div');
+        alert.style.cssText = 'padding: 1rem; margin-bottom: 1rem; border-radius: 6px; background: white; box-shadow: var(--shadow);';
+        alert.innerHTML = `<span class="badge ${alertClass}" style="margin-right: 0.5rem;">●</span>${message}`;
+        
+        container.appendChild(alert);
+
+        setTimeout(() => alert.remove(), 5000);
+    }
+
+    // Fermer modal en cliquant à l'extérieur
+    window.onclick = function(event) {
+        const modal = document.getElementById('userModal');
+        if (event.target === modal) {
+            closeUserModal();
+        }
+    }
+</script>
+{% endblock %}

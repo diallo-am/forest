@@ -1,0 +1,503 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Système IoT{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1>Tableau de Bord</h1>
+    
+    <!-- Statistiques -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/smart-sensor.png"></div>
+            <div class="stat-info">
+                <h3 id="capteursActifs">0</h3>
+                <p>Capteurs Actifs</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/tree-topology.png"></div>
+            <div class="stat-info">
+                <h3 id="noeudsActifs">0</h3>
+                <p>Noeuds Actifs</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/sideway(1).png"></div>
+            <div class="stat-info">
+                <h3 id="mesures24h">0</h3>
+                <p>Mesures (24h)</p>
+            </div>
+        </div>
+        
+        <div class="stat-card alert">
+            <div class="stat-icon"><img src="static/img/alert(2).png"></div>
+            <div class="stat-info">
+                <h3 id="alertesToday">0</h3>
+                <p>Alertes Aujourd'hui</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Dernières mesures avec filtre par nœud -->
+    <div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 style="margin: 0;">Dernières Mesures</h2>
+            <div class="chart-controls" style="margin: 0;">
+                <select id="noeudSelectMesures" onchange="chargerDernieresMesures()">
+                    <option value="">Tous les nœuds</option>
+                </select>
+            </div>
+        </div>
+        <div id="dernieresMesures" class="mesures-grid">
+            <p style="text-align: center; color: var(--text-muted);">Chargement des mesures...</p>
+        </div>
+    </div>
+    
+    <!-- Graphiques en matrice -->
+    <div class="section">
+        <h2>Évolution Temps Réel</h2>
+        <div class="chart-controls">
+            <select id="noeudSelectGraphique" onchange="chargerGraphiquesNoeud()">
+                <option value="">Sélectionner un nœud</option>
+            </select>
+        </div>
+        <div id="chartsContainer" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
+            <p style="text-align: center; color: var(--text-muted); grid-column: 1/-1;">
+                Sélectionnez un nœud pour afficher les graphiques de ses capteurs
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let chartInstances = {};
+let allNoeuds = [];
+
+async function chargerDashboard() {
+    const token = localStorage.getItem('iot_token');
+    
+    console.log('Chargement du dashboard...');
+    
+    if (!token) {
+        console.log('Pas de token, redirection');
+        window.location.href = '/';
+        return;
+    }
+    
+    try {
+        console.log('Appel API dashboard/summary...');
+        const response = await fetch(`${API_URL}/dashboard/summary`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        console.log('Réponse reçue, statut:', response.status);
+        
+        if (response.status === 401) {
+            console.log('Token invalide');
+            localStorage.removeItem('iot_token');
+            localStorage.removeItem('iot_user');
+            window.location.href = '/';
+            return;
+        }
+        
+        if (!response.ok) {
+            throw new Error('Erreur de chargement');
+        }
+        
+        const data = await response.json();
+        console.log('Données du dashboard:', data);
+        
+        // Mettre à jour les statistiques
+        document.getElementById('capteursActifs').textContent = data.capteurs_actifs || 0;
+        document.getElementById('noeudsActifs').textContent = data.noeuds_actifs || 0;
+        document.getElementById('mesures24h').textContent = data.mesures_24h || 0;
+        document.getElementById('alertesToday').textContent = data.alertes_aujourd_hui || 0;
+        
+        // Charger les nœuds pour les filtres
+        await chargerNoeuds();
+        
+        // Charger les dernières mesures (sans filtre initial)
+        await chargerDernieresMesures();
+        
+    } catch (error) {
+        console.error('Erreur chargement dashboard:', error);
+        showNotification('Erreur de chargement du dashboard', 'error');
+    }
+}
+
+// Charger tous les nœuds
+async function chargerNoeuds() {
+    const token = localStorage.getItem('iot_token');
+    
+    try {
+        const response = await fetch(`${API_URL}/noeuds?statut=actif`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!response.ok) throw new Error('Erreur chargement nœuds');
+        
+        allNoeuds = await response.json();
+        console.log('Nœuds chargés:', allNoeuds.length);
+        
+        // Remplir les deux selects de nœuds
+        const selectMesures = document.getElementById('noeudSelectMesures');
+        const selectGraphique = document.getElementById('noeudSelectGraphique');
+        
+        selectMesures.innerHTML = '<option value="">Tous les nœuds</option>';
+        selectGraphique.innerHTML = '<option value="">Sélectionner un nœud</option>';
+        
+        allNoeuds.forEach(noeud => {
+            const option1 = document.createElement('option');
+            option1.value = noeud.id;
+            option1.textContent = `${noeud.nom} - ${noeud.localisation || 'Sans localisation'}`;
+            selectMesures.appendChild(option1);
+            
+            const option2 = document.createElement('option');
+            option2.value = noeud.id;
+            option2.textContent = `${noeud.nom} - ${noeud.localisation || 'Sans localisation'}`;
+            selectGraphique.appendChild(option2);
+        });
+        
+    } catch (error) {
+        console.error('Erreur chargement nœuds:', error);
+    }
+}
+
+// Charger les dernières mesures
+async function chargerDernieresMesures() {
+    const token = localStorage.getItem('iot_token');
+    const noeudId = document.getElementById('noeudSelectMesures').value;
+    
+    console.log('Chargement dernières mesures, nœud:', noeudId || 'tous');
+    
+    try {
+        const mesuresDiv = document.getElementById('dernieresMesures');
+        
+        if (noeudId) {
+            // Mesures d'un seul nœud
+            const response = await fetch(`${API_URL}/mesures?noeud_id=${noeudId}&limit=50`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Erreur chargement mesures');
+            
+            const mesures = await response.json();
+            afficherMesures(mesures);
+            
+        } else {
+            // TOUS LES NŒUDS : récupérer la dernière mesure de chaque capteur de chaque nœud
+            const toutesLesMesures = [];
+            
+            for (const noeud of allNoeuds) {
+                try {
+                    const response = await fetch(`${API_URL}/mesures?noeud_id=${noeud.id}&limit=50`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    
+                    if (response.ok) {
+                        const mesures = await response.json();
+                        toutesLesMesures.push(...mesures);
+                    }
+                } catch (error) {
+                    console.error(`Erreur nœud ${noeud.id}:`, error);
+                }
+            }
+            
+            console.log('Total mesures récupérées:', toutesLesMesures.length);
+            afficherMesures(toutesLesMesures);
+        }
+        
+    } catch (error) {
+        console.error('Erreur chargement dernières mesures:', error);
+        document.getElementById('dernieresMesures').innerHTML = 
+            '<p style="text-align: center; color: var(--danger-color); grid-column: 1/-1;">Erreur de chargement des mesures</p>';
+    }
+}
+
+// Fonction pour afficher les mesures
+function afficherMesures(mesures) {
+    const mesuresDiv = document.getElementById('dernieresMesures');
+    
+    if (mesures && mesures.length > 0) {
+        // Grouper par nœud 
+        const mesuresParCapteur = {};
+        mesures.forEach(mesure => {
+            const key = `${mesure.noeud_id}_${mesure.capteur_id}`;
+            if (!mesuresParCapteur[key] || 
+                new Date(mesure.timestamp) > new Date(mesuresParCapteur[key].timestamp)) {
+                mesuresParCapteur[key] = mesure;
+            }
+        });
+        
+        console.log('Mesures uniques à afficher:', Object.keys(mesuresParCapteur).length);
+        
+        mesuresDiv.innerHTML = '';
+        
+        // Trier par timestamp décroissant
+        const mesuresTriees = Object.values(mesuresParCapteur).sort((a, b) => 
+            new Date(b.timestamp) - new Date(a.timestamp)
+        );
+        
+        // Afficher les mesures uniques
+        mesuresTriees.forEach((mesure) => {
+            const card = document.createElement('div');
+            card.className = 'mesure-card';
+            
+            // Déterminer la couleur selon le type de capteur
+            let borderColor = 'var(--primary-color)';
+            if (mesure.type === 'temperature') borderColor = 'var(--danger-color)';
+            else if (mesure.type === 'humidite') borderColor = 'var(--info-color)';
+            else if (mesure.type === 'fumee') borderColor = 'var(--warning-color)';
+            
+            card.style.borderLeftColor = borderColor;
+            
+            card.innerHTML = `
+                <h4>${mesure.capteur_nom}</h4>
+                <div class="mesure-valeur" style="color: ${borderColor};">
+                    ${parseFloat(mesure.valeur).toFixed(2)} ${mesure.unite || ''}
+                </div>
+                <p class="mesure-info">
+                    <strong>Nœud:</strong> ${mesure.noeud_nom}<br>
+                    <strong>Type:</strong> ${mesure.type}
+                </p>
+                <p class="mesure-time">
+                    ${new Date(mesure.timestamp).toLocaleString('fr-FR')}
+                </p>
+            `;
+            mesuresDiv.appendChild(card);
+        });
+    } else {
+        mesuresDiv.innerHTML = '<p style="text-align: center; color: var(--text-muted); grid-column: 1/-1;">Aucune mesure disponible</p>';
+    }
+}
+
+// Charger les graphiques pour un nœud 
+async function chargerGraphiquesNoeud() {
+    const noeudId = document.getElementById('noeudSelectGraphique').value;
+    const container = document.getElementById('chartsContainer');
+    const token = localStorage.getItem('iot_token');
+    
+    // Détruire tous les graphiques existants
+    Object.values(chartInstances).forEach(chart => chart.destroy());
+    chartInstances = {};
+    
+    if (!noeudId) {
+        container.innerHTML = '<p style="text-align: center; color: var(--text-muted); grid-column: 1/-1;">Sélectionnez un nœud pour afficher les graphiques de ses capteurs</p>';
+        return;
+    }
+    
+    container.innerHTML = '<p style="text-align: center; color: var(--text-muted); grid-column: 1/-1;">Chargement des graphiques...</p>';
+    
+    try {
+        // Récupérer les informations du nœud
+        const responseNoeud = await fetch(`${API_URL}/noeuds/${noeudId}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!responseNoeud.ok) throw new Error('Erreur chargement nœud');
+        
+        const noeud = await responseNoeud.json();
+        console.log('Nœud sélectionné:', noeud.nom);
+        
+        // Récupérer tous les capteurs
+        const responseCapteurs = await fetch(`${API_URL}/capteurs`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!responseCapteurs.ok) throw new Error('Erreur chargement capteurs');
+        
+        const tousCapteurs = await responseCapteurs.json();
+        const capteursNoeud = noeud.capteurs ? noeud.capteurs.split(', ') : [];
+        
+        // Filtrer les capteurs associés au nœud
+        const capteursFiltres = tousCapteurs.filter(c => capteursNoeud.includes(c.nom));
+        
+        console.log('Capteurs du nœud:', capteursFiltres.length);
+        
+        if (capteursFiltres.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: var(--warning-color); grid-column: 1/-1;">Aucun capteur associé à ce nœud</p>';
+            return;
+        }
+        
+        // Créer un conteneur pour chaque capteur
+        container.innerHTML = '';
+        
+        for (const capteur of capteursFiltres) {
+            await creerGraphiqueCapteur(capteur, noeudId, container, token);
+        }
+        
+    } catch (error) {
+        console.error('Erreur chargement graphiques:', error);
+        container.innerHTML = '<p style="text-align: center; color: var(--danger-color); grid-column: 1/-1;">Erreur de chargement des graphiques</p>';
+    }
+}
+
+// Créer un graphique pour un capteur spécifique
+async function creerGraphiqueCapteur(capteur, noeudId, container, token) {
+    try {
+        // Récupérer l'historique
+        const response = await fetch(
+            `${API_URL}/mesures/historique?capteur_id=${capteur.id}&intervalle=heure&limit=24`,
+            { headers: { 'Authorization': `Bearer ${token}` }}
+        );
+        
+        if (!response.ok) throw new Error('Erreur historique');
+        
+        const data = await response.json();
+        
+        // Filtrer les données pour ce nœud uniquement
+        
+        if (data.length === 0) {
+            console.log(`Pas de données pour ${capteur.nom}`);
+            return; 
+        }
+        
+        // Créer le conteneur du graphique
+        const chartWrapper = document.createElement('div');
+        chartWrapper.style.cssText = 'background: white; padding: 1.5rem; border-radius: 10px; box-shadow: var(--shadow);';
+        
+        // Déterminer la couleur selon le type
+        let color = 'rgba(0, 168, 150, 1)';
+        if (capteur.type === 'temperature') color = 'rgba(230, 57, 70, 1)';
+        else if (capteur.type === 'humidite') color = 'rgba(5, 130, 202, 1)';
+        else if (capteur.type === 'fumee') color = 'rgba(247, 127, 0, 1)';
+        
+        const colorTransparent = color.replace('1)', '0.1)');
+        
+        chartWrapper.innerHTML = `
+            <h3 style="margin-bottom: 1rem; color: var(--dark-color);">
+                ${capteur.nom} <span style="font-size: 0.9rem; color: var(--text-muted);">(${capteur.type})</span>
+            </h3>
+            <canvas id="chart_${capteur.id}" style="max-height: 250px;"></canvas>
+        `;
+        
+        container.appendChild(chartWrapper);
+        
+        // Préparer les données
+        const labels = data.map(d => d.periode).reverse();
+        const moyennes = data.map(d => parseFloat(d.moyenne)).reverse();
+        const minimums = data.map(d => parseFloat(d.minimum)).reverse();
+        const maximums = data.map(d => parseFloat(d.maximum)).reverse();
+        
+        // Créer le graphique
+        const ctx = document.getElementById(`chart_${capteur.id}`).getContext('2d');
+        chartInstances[capteur.id] = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Moyenne',
+                        data: moyennes,
+                        borderColor: color,
+                        backgroundColor: colorTransparent,
+                        tension: 0.4,
+                        borderWidth: 2,
+                        fill: true
+                    },
+                    {
+                        label: 'Max',
+                        data: maximums,
+                        borderColor: 'rgba(230, 57, 70, 0.5)',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        fill: false
+                    },
+                    {
+                        label: 'Min',
+                        data: minimums,
+                        borderColor: 'rgba(5, 130, 202, 0.5)',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        fill: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            font: { size: 11 },
+                            boxWidth: 15
+                        }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            label: function(context) {
+                                return `${context.dataset.label}: ${context.parsed.y.toFixed(2)} ${capteur.unite || ''}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        ticks: {
+                            font: { size: 10 },
+                            callback: function(value) {
+                                return value.toFixed(1) + (capteur.unite ? ' ' + capteur.unite : '');
+                            }
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            font: { size: 9 },
+                            maxRotation: 45,
+                            minRotation: 45
+                        }
+                    }
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error(`Erreur graphique ${capteur.nom}:`, error);
+    }
+}
+
+// Fonction de notification
+function showNotification(message, type) {
+    const alertClass = type === 'success' ? 'badge-success' : 
+                      type === 'error' || type === 'danger' ? 'badge-danger' : 
+                      type === 'warning' ? 'badge-warning' : 'badge-info';
+    
+    const alert = document.createElement('div');
+    alert.style.cssText = 'position: fixed; top: 20px; right: 20px; padding: 1rem; border-radius: 6px; background: white; box-shadow: var(--shadow); z-index: 9999; animation: slideIn 0.3s ease;';
+    alert.innerHTML = `<span class="badge ${alertClass}" style="margin-right: 0.5rem;">●</span>${message}`;
+    
+    document.body.appendChild(alert);
+    
+    setTimeout(() => {
+        alert.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => alert.remove(), 300);
+    }, 3000);
+}
+
+// Charger au démarrage
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Dashboard: DOMContentLoaded déclenché');
+    chargerDashboard();
+    
+    // Actualiser les mesures toutes les 10 secondes
+    setInterval(() => {
+        chargerDernieresMesures();
+    }, 10000);
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}

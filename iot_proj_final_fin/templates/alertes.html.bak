@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+
+{% block title %}Alertes - Système IoT{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Gestion des Alertes</h1>
+    <button class="btn btn-primary" onclick="afficherModal()"><img src="static/img/new.png" width="20px"> Nouvelle Alerte</button>
+</div>
+
+<div class="filters">
+    <select id="severiteFilter" onchange="chargerAlertes()">
+        <option value="">Toutes les sévérités</option>
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+        <option value="critical">Critical</option>
+    </select>
+    
+    <label>
+        <input type="checkbox" id="actifFilter" checked onchange="chargerAlertes()">
+        Actives uniquement
+    </label>
+</div>
+
+<div class="tabs">
+    <button class="tab-button active" onclick="changerTab('alertes')">Configuration</button>
+    <button class="tab-button" onclick="changerTab('logs')">Historique</button>
+</div>
+
+<div id="tabAlertes" class="tab-content active">
+    <div id="listeAlertes" class="cards-grid"></div>
+</div>
+
+<div id="tabLogs" class="tab-content">
+    <div id="listeLogsAlertes" class="logs-list"></div>
+</div>
+
+<!-- Modal Ajout/Édition -->
+<div id="modalAlerte" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="fermerModal()">&times;</span>
+        <h2 id="modalTitle">Nouvelle Alerte</h2>
+        
+        <form id="formAlerte" onsubmit="sauvegarderAlerte(event)">
+            <input type="hidden" id="alerteId">
+            
+            <div class="form-group">
+                <label for="capteur_id">Capteur *</label>
+                <select id="capteur_id" required></select>
+            </div>
+            
+            <div class="form-group">
+                <label for="noeud_id">Noeud (optionnel)</label>
+                <select id="noeud_id">
+                    <option value="">Tous les noeuds</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="type_alerte">Type d'alerte *</label>
+                <select id="type_alerte" required onchange="updateSeuilFields()">
+                    <option value="seuil_min">Seuil minimum</option>
+                    <option value="seuil_max">Seuil maximum</option>
+                    <option value="anomalie">Anomalie</option>
+                    <option value="hors_ligne">Hors ligne</option>
+                    <option value="autre">Autre</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="severite">Sévérité *</label>
+                <select id="severite" required>
+                    <option value="info">Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="critical">Critical</option>
+                </select>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group" id="seuilMinGroup">
+                    <label for="seuil_min">Seuil minimum</label>
+                    <input type="number" id="seuil_min" step="0.01">
+                </div>
+                
+                <div class="form-group" id="seuilMaxGroup">
+                    <label for="seuil_max">Seuil maximum</label>
+                    <input type="number" id="seuil_max" step="0.01">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="message">Message</label>
+                <textarea id="message" rows="3"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="email_notification" checked>
+                    Activer les notifications par email
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="actif" checked>
+                    Alerte active
+                </label>
+            </div>
+            
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="fermerModal()">Annuler</button>
+                <button type="submit" class="btn btn-primary">Enregistrer</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function changerTab(tab) {
+        // Gérer les boutons
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+        
+        // Gérer le contenu
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        
+        if (tab === 'alertes') {
+            document.getElementById('tabAlertes').classList.add('active');
+            chargerAlertes();
+        } else {
+            document.getElementById('tabLogs').classList.add('active');
+            chargerLogsAlertes();
+        }
+    }
+
+    function updateSeuilFields() {
+        const type = document.getElementById('type_alerte').value;
+        const seuilMinGroup = document.getElementById('seuilMinGroup');
+        const seuilMaxGroup = document.getElementById('seuilMaxGroup');
+        
+        if (type === 'seuil_min') {
+            seuilMinGroup.style.display = 'block';
+            seuilMaxGroup.style.display = 'none';
+        } else if (type === 'seuil_max') {
+            seuilMinGroup.style.display = 'none';
+            seuilMaxGroup.style.display = 'block';
+        } else {
+            seuilMinGroup.style.display = 'none';
+            seuilMaxGroup.style.display = 'none';
+        }
+    }
+
+    async function chargerAlertes() {
+        const token = localStorage.getItem('iot_token');
+        const severite = document.getElementById('severiteFilter').value;
+        const actif = document.getElementById('actifFilter').checked;
+        
+        let url = `${API_URL}/alertes?`;
+        if (severite) url += `severite=${severite}&`;
+        if (actif) url += `actif=true`;
+        
+        try {
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            const alertes = await response.json();
+            const liste = document.getElementById('listeAlertes');
+            liste.innerHTML = '';
+            
+            alertes.forEach(alerte => {
+                const severiteClass = {
+                    'info': 'info',
+                    'warning': 'warning',
+                    'critical': 'danger'
+                }[alerte.severite];
+                
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div class="card-header">
+                        <h3>${alerte.capteur_nom}</h3>
+                        <div>
+                            <span class="badge badge-${severiteClass}">${alerte.severite}</span>
+                            <span class="badge ${alerte.actif ? 'badge-success' : 'badge-inactive'}">
+                                ${alerte.actif ? 'Active' : 'Inactive'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Type:</strong> ${alerte.type_alerte}</p>
+                        <p><strong>Noeud:</strong> ${alerte.noeud_nom || 'Tous'}</p>
+                        ${alerte.seuil_min ? `<p><strong>Seuil min:</strong> ${alerte.seuil_min}</p>` : ''}
+                        ${alerte.seuil_max ? `<p><strong>Seuil max:</strong> ${alerte.seuil_max}</p>` : ''}
+                        <p><strong>Message:</strong> ${alerte.message || 'Aucun'}</p>
+                        <p><strong>Email:</strong> ${alerte.email_notification ? 'Activé' : 'Désactivé'}</p>
+                    </div>
+                    <div class="card-footer">
+                        <button class="btn btn-sm btn-secondary" onclick="editerAlerte(${alerte.id})">Éditer</button>
+                        <button class="btn btn-sm btn-danger" onclick="supprimerAlerte(${alerte.id})">Supprimer</button>
+                    </div>
+                `;
+                liste.appendChild(card);
+            });
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de chargement des alertes');
+        }
+    }
+
+    async function chargerLogsAlertes() {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/alertes/logs?limit=50`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            const logs = await response.json();
+            const liste = document.getElementById('listeLogsAlertes');
+            liste.innerHTML = '';
+            
+            if (logs.length === 0) {
+                liste.innerHTML = '<p class="text-center">Aucune alerte déclenchée</p>';
+                return;
+            }
+            
+            logs.forEach(log => {
+                const severiteClass = {
+                    'info': 'info',
+                    'warning': 'warning',
+                    'critical': 'danger'
+                }[log.severite];
+                
+                const div = document.createElement('div');
+                div.className = `log-item log-${severiteClass}`;
+                div.innerHTML = `
+                    <div class="log-header">
+                        <span class="badge badge-${severiteClass}">${log.severite}</span>
+                        <span>${new Date(log.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div class="log-body">
+                        <p><strong>${log.capteur_nom}</strong> ${log.noeud_nom ? `(${log.noeud_nom})` : ''}</p>
+                        <p>${log.message}</p>
+                        <p class="text-muted">Valeur: ${log.valeur_mesuree}</p>
+                        <p class="text-muted">Email: ${log.email_envoye ? 'Envoyé' : 'En attente'}</p>
+                    </div>
+                `;
+                liste.appendChild(div);
+            });
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de chargement des logs');
+        }
+    }
+
+    async function afficherModal() {
+        document.getElementById('modalTitle').textContent = 'Nouvelle Alerte';
+        document.getElementById('formAlerte').reset();
+        document.getElementById('alerteId').value = '';
+        
+        // Charger les capteurs et noeuds
+        await chargerCapteursEtNoeuds();
+        
+        updateSeuilFields();
+        document.getElementById('modalAlerte').style.display = 'block';
+    }
+
+    async function chargerCapteursEtNoeuds() {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            // Charger les capteurs
+            const responseCapteurs = await fetch(`${API_URL}/capteurs?actif=true`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const capteurs = await responseCapteurs.json();
+            
+            const selectCapteur = document.getElementById('capteur_id');
+            selectCapteur.innerHTML = '<option value="">Sélectionner un capteur</option>';
+            capteurs.forEach(capteur => {
+                const option = document.createElement('option');
+                option.value = capteur.id;
+                option.textContent = `${capteur.nom} (${capteur.type})`;
+                selectCapteur.appendChild(option);
+            });
+            
+            // Charger les noeuds
+            const responseNoeuds = await fetch(`${API_URL}/noeuds?statut=actif`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const noeuds = await responseNoeuds.json();
+            
+            const selectNoeud = document.getElementById('noeud_id');
+            selectNoeud.innerHTML = '<option value="">Tous les noeuds</option>';
+            noeuds.forEach(noeud => {
+                const option = document.createElement('option');
+                option.value = noeud.id;
+                option.textContent = noeud.nom;
+                selectNoeud.appendChild(option);
+            });
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+        }
+    }
+
+    function fermerModal() {
+        document.getElementById('modalAlerte').style.display = 'none';
+    }
+
+    async function editerAlerte(id) {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            // Charger les capteurs et noeuds d'abord
+            await chargerCapteursEtNoeuds();
+            
+            const response = await fetch(`${API_URL}/alertes/${id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            const alerte = await response.json();
+            
+            document.getElementById('modalTitle').textContent = 'Éditer Alerte';
+            document.getElementById('alerteId').value = alerte.id;
+            document.getElementById('capteur_id').value = alerte.capteur_id;
+            document.getElementById('noeud_id').value = alerte.noeud_id || '';
+            document.getElementById('type_alerte').value = alerte.type_alerte;
+            document.getElementById('severite').value = alerte.severite;
+            document.getElementById('seuil_min').value = alerte.seuil_min || '';
+            document.getElementById('seuil_max').value = alerte.seuil_max || '';
+            document.getElementById('message').value = alerte.message || '';
+            document.getElementById('email_notification').checked = alerte.email_notification;
+            document.getElementById('actif').checked = alerte.actif;
+            
+            updateSeuilFields();
+            document.getElementById('modalAlerte').style.display = 'block';} catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de chargement de l\'alerte');
+    }
+}
+
+async function sauvegarderAlerte(event) {
+    event.preventDefault();
+    
+    const token = localStorage.getItem('iot_token');
+    const id = document.getElementById('alerteId').value;
+    
+    const data = {
+        capteur_id: parseInt(document.getElementById('capteur_id').value),
+        noeud_id: document.getElementById('noeud_id').value ? parseInt(document.getElementById('noeud_id').value) : null,
+        type_alerte: document.getElementById('type_alerte').value,
+        severite: document.getElementById('severite').value,
+        seuil_min: document.getElementById('seuil_min').value ? parseFloat(document.getElementById('seuil_min').value) : null,
+        seuil_max: document.getElementById('seuil_max').value ? parseFloat(document.getElementById('seuil_max').value) : null,
+        message: document.getElementById('message').value,
+        email_notification: document.getElementById('email_notification').checked,
+        actif: document.getElementById('actif').checked
+    };
+    
+    try {
+        const url = id ? `${API_URL}/alertes/${id}` : `${API_URL}/alertes`;
+        const method = id ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+            method: method,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            alert('Alerte enregistrée avec succès');
+            fermerModal();
+            chargerAlertes();
+        } else {
+            const error = await response.json();
+            alert('Erreur: ' + error.error);
+        }
+        
+    } catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de sauvegarde');
+    }
+}
+
+async function supprimerAlerte(id) {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cette alerte ?')) {
+        return;
+    }
+    
+    const token = localStorage.getItem('iot_token');
+    
+    try {
+        const response = await fetch(`${API_URL}/alertes/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (response.ok) {
+            alert('Alerte supprimée');
+            chargerAlertes();
+        } else {
+            const error = await response.json();
+            alert('Erreur: ' + error.error);
+        }
+        
+    } catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de suppression');
+    }
+}
+
+// Fermer le modal en cliquant à l'extérieur
+window.onclick = function(event) {
+    const modal = document.getElementById('modalAlerte');
+    if (event.target == modal) {
+        fermerModal();
+    }
+}
+
+// Charger au démarrage
+document.addEventListener('DOMContentLoaded', chargerAlertes);
+</script> {%endblock%}

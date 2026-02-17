@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+
+{% block title %}Capteurs - Système IoT{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Gestion des Capteurs</h1>
+    <button class="btn btn-primary" onclick="afficherModal()"><img src="static/img/new.png" width="20px"> Nouveau Capteur</button>
+</div>
+
+<div class="filters">
+    <div class="form-group" style="margin-bottom: 0;">
+        <select id="noeudFilter" onchange="appliquerFiltres()">
+            <option value="">Tous les nœuds</option>
+        </select>
+    </div>
+    
+    <div class="form-group" style="margin-bottom: 0;">
+        <select id="typeFilter" onchange="appliquerFiltres()">
+            <option value="">Tous les types</option>
+            <option value="temperature">Température</option>
+            <option value="humidite">Humidité</option>
+            <option value="co2">Gaz/Fumée</option>
+            <option value="flamme">Flamme</option>
+        </select>
+    </div>
+    
+    <label>
+        <input type="checkbox" id="actifFilter" checked onchange="appliquerFiltres()">
+        Actifs uniquement
+    </label>
+</div>
+
+<div id="listeCapteurs" class="cards-grid"></div>
+
+<!-- Modal Ajout/Édition -->
+<div id="modalCapteur" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="fermerModal()">&times;</span>
+        <h2 id="modalTitle">Nouveau Capteur</h2>
+        
+        <form id="formCapteur" onsubmit="sauvegarderCapteur(event)">
+            <input type="hidden" id="capteurId">
+            
+            <div class="form-group">
+                <label for="nom">Nom *</label>
+                <input type="text" id="nom" required placeholder="Ex: Capteur Température Zone A">
+            </div>
+            
+            <div class="form-group">
+                <label for="type">Type *</label>
+                <select id="type" required>
+                    <option value="temperature">Température</option>
+                    <option value="humidite">Humidité</option>
+                    <option value="co2">Gaz/Fumée</option>
+                    <option value="flamme">Flamme</option>
+                    <option value="pression">Pression</option>
+                    <option value="autre">Autre</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="unite">Unité</label>
+                <input type="text" id="unite" placeholder="°C, %, ppm, booléen, Pa...">
+            </div>
+            
+            <div class="form-group">
+                <label for="description">Description</label>
+                <textarea id="description" rows="3" placeholder="Description détaillée du capteur"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="actif" checked>
+                    Actif
+                </label>
+            </div>
+            
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="fermerModal()">Annuler</button>
+                <button type="submit" class="btn btn-primary">Enregistrer</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let tousLesCapteurs = [];
+    let tousLesNoeuds = [];
+    let associationsCapteurs = {};
+
+    // Charger les nœuds pour le filtre
+    async function chargerNoeuds() {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/noeuds`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Erreur chargement nœuds');
+            
+            tousLesNoeuds = await response.json();
+            
+            // Remplir le select des nœuds
+            const noeudFilter = document.getElementById('noeudFilter');
+            noeudFilter.innerHTML = '<option value="">Tous les nœuds</option>';
+            
+            tousLesNoeuds.forEach(noeud => {
+                const option = document.createElement('option');
+                option.value = noeud.id;
+                option.textContent = `${noeud.nom} (${noeud.localisation || 'Sans localisation'})`;
+                noeudFilter.appendChild(option);
+            });
+            
+        } catch (error) {
+            console.error('Erreur chargement nœuds:', error);
+        }
+    }
+
+    // Charger les associations nœud-capteur
+    async function chargerAssociations() {
+        const token = localStorage.getItem('iot_token');
+        associationsCapteurs = {};
+        
+        try {
+            for (const noeud of tousLesNoeuds) {
+                const response = await fetch(`${API_URL}/noeuds/${noeud.id}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.capteurs) {
+                        const capteursList = data.capteurs.split(', ');
+                        capteursList.forEach(capteurNom => {
+                            if (!associationsCapteurs[capteurNom]) {
+                                associationsCapteurs[capteurNom] = [];
+                            }
+                            associationsCapteurs[capteurNom].push({
+                                id: noeud.id,
+                                nom: noeud.nom,
+                                localisation: noeud.localisation
+                            });
+                        });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Erreur chargement associations:', error);
+        }
+    }
+
+    // Charger tous les capteurs
+    async function chargerCapteurs() {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/capteurs`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Erreur chargement capteurs');
+            
+            tousLesCapteurs = await response.json();
+            appliquerFiltres();
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur de chargement des capteurs', 'error');
+        }
+    }
+
+    // Appliquer les filtres
+    function appliquerFiltres() {
+        const noeudId = document.getElementById('noeudFilter').value;
+        const type = document.getElementById('typeFilter').value;
+        const actif = document.getElementById('actifFilter').checked;
+        
+        let capteursFiltres = tousLesCapteurs;
+        
+        // Filtre par statut actif
+        if (actif) {
+            capteursFiltres = capteursFiltres.filter(c => c.actif);
+        }
+        
+        // Filtre par type
+        if (type) {
+            capteursFiltres = capteursFiltres.filter(c => c.type === type);
+        }
+        
+        // Filtre par nœud
+        if (noeudId) {
+            const noeudSelectionne = tousLesNoeuds.find(n => n.id == noeudId);
+            if (noeudSelectionne) {
+                capteursFiltres = capteursFiltres.filter(c => {
+                    const noeuds = associationsCapteurs[c.nom] || [];
+                    return noeuds.some(n => n.id == noeudId);
+                });
+            }
+        }
+        
+        afficherCapteurs(capteursFiltres);
+    }
+
+    // Afficher les capteurs
+    function afficherCapteurs(capteurs) {
+        const liste = document.getElementById('listeCapteurs');
+        
+        if (capteurs.length === 0) {
+            liste.innerHTML = `
+                <div class="card" style="grid-column: 1/-1;">
+                    <div class="card-body text-center">
+                        <p style="color: var(--text-muted);">Aucun capteur ne correspond aux critères de filtrage</p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        
+        liste.innerHTML = '';
+        
+        capteurs.forEach(capteur => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <div class="card-header">
+                    <h3>${capteur.nom}</h3>
+                    <span class="badge ${capteur.actif ? 'badge-success' : 'badge-inactive'}">
+                        ${capteur.actif ? 'Actif' : 'Inactif'}
+                    </span>
+                </div>
+                <div class="card-body">
+                    <p><strong>Type:</strong> ${capteur.type}</p>
+                    <p><strong>Unité:</strong> ${capteur.unite || 'N/A'}</p>
+                    <p><strong>Description:</strong> ${capteur.description || 'Aucune'}</p>
+                    <p class="text-muted" style="margin-top: 0.5rem;">
+                        Créé le: ${new Date(capteur.date_creation).toLocaleDateString('fr-FR')}
+                    </p>
+                </div>
+                <div class="card-footer">
+                    <button class="btn btn-sm btn-secondary" onclick="editerCapteur(${capteur.id})">Éditer</button>
+                    <button class="btn btn-sm btn-danger" onclick="supprimerCapteur(${capteur.id})">Supprimer</button>
+                </div>
+            `;
+            liste.appendChild(card);
+        });
+    }
+
+    function afficherModal() {
+        document.getElementById('modalTitle').textContent = 'Nouveau Capteur';
+        document.getElementById('formCapteur').reset();
+        document.getElementById('capteurId').value = '';
+        document.getElementById('modalCapteur').style.display = 'block';
+    }
+
+    function fermerModal() {
+        document.getElementById('modalCapteur').style.display = 'none';
+    }
+
+    async function editerCapteur(id) {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/capteurs/${id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Capteur non trouvé');
+            
+            const capteur = await response.json();
+            
+            document.getElementById('modalTitle').textContent = 'Éditer Capteur';
+            document.getElementById('capteurId').value = capteur.id;
+            document.getElementById('nom').value = capteur.nom;
+            document.getElementById('type').value = capteur.type;
+            document.getElementById('unite').value = capteur.unite || '';
+            document.getElementById('description').value = capteur.description || '';
+            document.getElementById('actif').checked = capteur.actif;
+            
+            document.getElementById('modalCapteur').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur de chargement du capteur', 'error');
+        }
+    }
+
+    async function sauvegarderCapteur(event) {
+        event.preventDefault();
+        
+        const token = localStorage.getItem('iot_token');
+        const id = document.getElementById('capteurId').value;
+        
+        const data = {
+            nom: document.getElementById('nom').value,
+            type: document.getElementById('type').value,
+            unite: document.getElementById('unite').value,
+            description: document.getElementById('description').value,
+            actif: document.getElementById('actif').checked
+        };
+        
+        try {
+            const url = id ? `${API_URL}/capteurs/${id}` : `${API_URL}/capteurs`;
+            const method = id ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            showNotification('Capteur enregistré avec succès', 'success');
+            fermerModal();
+            await initialiserPage();
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+
+    async function supprimerCapteur(id) {
+        if (!confirm('Êtes-vous sûr de vouloir supprimer ce capteur ? Toutes ses mesures seront également supprimées.')) {
+            return;
+        }
+        
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/capteurs/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            showNotification('Capteur supprimé avec succès', 'success');
+            await initialiserPage();
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+
+    // Initialisation complète
+    async function initialiserPage() {
+        await chargerNoeuds();
+        await chargerAssociations();
+        await chargerCapteurs();
+    }
+
+    // Fermer le modal en cliquant à l'extérieur
+    window.onclick = function(event) {
+        const modal = document.getElementById('modalCapteur');
+        if (event.target == modal) {
+            fermerModal();
+        }
+    }
+
+    // Charger au démarrage
+    document.addEventListener('DOMContentLoaded', initialiserPage);
+</script>
+{% endblock %}

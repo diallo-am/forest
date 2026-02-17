@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Capteurs - Système IoT{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Gestion des Capteurs</h1>
+    <button class="btn btn-primary" onclick="afficherModal()"><img src="static/img/new.png" width="20px"> Nouveau Capteur</button>
+</div>
+
+<div class="filters">
+    <select id="typeFilter" onchange="chargerCapteurs()">
+        <option value="">Tous les types</option>
+        <option value="temperature">Température</option>
+        <option value="humidite">Humidité</option>
+        <option value="co2">Gaz/Fumée</option>
+        <option value="flamme">Flamme</option>
+    </select>
+    
+    <label>
+        <input type="checkbox" id="actifFilter" checked onchange="chargerCapteurs()">
+        Actifs uniquement
+    </label>
+</div>
+
+<div id="listeCapteurs" class="cards-grid"></div>
+
+<!-- Modal Ajout/Édition -->
+<div id="modalCapteur" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="fermerModal()">&times;</span>
+        <h2 id="modalTitle">Nouveau Capteur</h2>
+        
+        <form id="formCapteur" onsubmit="sauvegarderCapteur(event)">
+            <input type="hidden" id="capteurId">
+            
+            <div class="form-group">
+                <label for="nom">Nom *</label>
+                <input type="text" id="nom" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="type">Type *</label>
+                <select id="type" required>
+                    <option value="temperature">Température</option>
+                    <option value="humidite">Humidité</option>
+                    <option value="co2">Gaz/Fumée</option>
+                    <option value="flamme">Flamme</option>
+                    <option value="pression">Pression</option>
+                    <option value="autre">Autre</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="unite">Unité</label>
+                <input type="text" id="unite" placeholder="°C, %, ppm,booléen,Pa...">
+            </div>
+            
+            <div class="form-group">
+                <label for="description">Description</label>
+                <textarea id="description" rows="3"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="actif" checked>
+                    Actif
+                </label>
+            </div>
+            
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="fermerModal()">Annuler</button>
+                <button type="submit" class="btn btn-primary">Enregistrer</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function chargerCapteurs() {
+        const token = localStorage.getItem('iot_token');
+        const type = document.getElementById('typeFilter').value;
+        const actif = document.getElementById('actifFilter').checked;
+        
+        let url = `${API_URL}/capteurs?`;
+        if (type) url += `type=${type}&`;
+        if (actif) url += `actif=true`;
+        
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            const capteurs = await response.json();
+            const liste = document.getElementById('listeCapteurs');
+            liste.innerHTML = '';
+            
+            capteurs.forEach(capteur => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div class="card-header">
+                        <h3>${capteur.nom}</h3>
+                        <span class="badge ${capteur.actif ? 'badge-success' : 'badge-inactive'}">
+                            ${capteur.actif ? 'Actif' : 'Inactif'}
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Type:</strong> ${capteur.type}</p>
+                        <p><strong>Unité:</strong> ${capteur.unite || 'N/A'}</p>
+                        <p><strong>Description:</strong> ${capteur.description || 'Aucune'}</p>
+                        <p class="text-muted">Créé le: ${new Date(capteur.date_creation).toLocaleDateString()}</p>
+                    </div>
+                    <div class="card-footer">
+                        <button class="btn btn-sm btn-secondary" onclick="editerCapteur(${capteur.id})">Éditer</button>
+                        <button class="btn btn-sm btn-danger" onclick="supprimerCapteur(${capteur.id})">Supprimer</button>
+                    </div>
+                `;
+                liste.appendChild(card);
+            });
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de chargement des capteurs');
+        }
+    }
+
+    function afficherModal() {
+        document.getElementById('modalTitle').textContent = 'Nouveau Capteur';
+        document.getElementById('formCapteur').reset();
+        document.getElementById('capteurId').value = '';
+        document.getElementById('modalCapteur').style.display = 'block';
+    }
+
+    function fermerModal() {
+        document.getElementById('modalCapteur').style.display = 'none';
+    }
+
+    async function editerCapteur(id) {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/capteurs/${id}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            const capteur = await response.json();
+            
+            document.getElementById('modalTitle').textContent = 'Éditer Capteur';
+            document.getElementById('capteurId').value = capteur.id;
+            document.getElementById('nom').value = capteur.nom;
+            document.getElementById('type').value = capteur.type;
+            document.getElementById('unite').value = capteur.unite || '';
+            document.getElementById('description').value = capteur.description || '';
+            document.getElementById('actif').checked = capteur.actif;
+            
+            document.getElementById('modalCapteur').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de chargement du capteur');
+        }
+    }
+
+    async function sauvegarderCapteur(event) {
+        event.preventDefault();
+        
+        const token = localStorage.getItem('iot_token');
+        const id = document.getElementById('capteurId').value;
+        
+        const data = {
+            nom: document.getElementById('nom').value,
+            type: document.getElementById('type').value,
+            unite: document.getElementById('unite').value,
+            description: document.getElementById('description').value,
+            actif: document.getElementById('actif').checked
+        };
+        
+        try {
+            const url = id ? `${API_URL}/capteurs/${id}` : `${API_URL}/capteurs`;
+            const method = id ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                alert('Capteur enregistré avec succès');
+                fermerModal();
+                chargerCapteurs();
+            } else {
+                const error = await response.json();
+                alert('Erreur: ' + error.error);
+            }
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de sauvegarde');
+        }
+    }
+
+    async function supprimerCapteur(id) {
+        if (!confirm('Êtes-vous sûr de vouloir supprimer ce capteur ?')) {
+            return;
+        }
+        
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/capteurs/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            if (response.ok) {
+                alert('Capteur supprimé');
+                chargerCapteurs();
+            } else {
+                const error = await response.json();
+                alert('Erreur: ' + error.error);
+            }
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            alert('Erreur de suppression');
+        }
+    }
+
+    // Fermer le modal en cliquant à l'extérieur
+    window.onclick = function(event) {
+        const modal = document.getElementById('modalCapteur');
+        if (event.target == modal) {
+            fermerModal();
+        }
+    }
+
+    // Charger au démarrage
+    document.addEventListener('DOMContentLoaded', chargerCapteurs);
+</script>
+{% endblock %}

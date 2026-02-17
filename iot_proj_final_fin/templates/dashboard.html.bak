@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Système IoT{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1>Tableau de Bord</h1>
+    
+    <!-- Statistiques -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/smart-sensor.png"></div>
+            <div class="stat-info">
+                <h3 id="capteursActifs">0</h3>
+                <p>Capteurs Actifs</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/tree-topology.png"></div>
+            <div class="stat-info">
+                <h3 id="noeudsActifs">0</h3>
+                <p>Noeuds Actifs</p>
+            </div>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon"><img src="static/img/sideway(1).png"></div>
+            <div class="stat-info">
+                <h3 id="mesures24h">0</h3>
+                <p>Mesures (24h)</p>
+            </div>
+        </div>
+        
+        <div class="stat-card alert">
+            <div class="stat-icon"><img src="static/img/alert(2).png"></div>
+            <div class="stat-info">
+                <h3 id="alertesToday">0</h3>
+                <p>Alertes Aujourd'hui</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Dernières mesures -->
+    <div class="section">
+        <h2>Dernières Mesures</h2>
+        <div id="dernieresMesures" class="mesures-grid"></div>
+    </div>
+    
+    <!-- Graphique -->
+    <div class="section">
+        <h2>Évolution Temps Réel</h2>
+        <div class="chart-controls">
+            <select id="capteurSelect" onchange="chargerGraphique()">
+                <option value="">Sélectionner un capteur</option>
+            </select>
+        </div>
+        <canvas id="chartMesures" width="400" height="150"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let chartInstance = null;
+
+async function chargerDashboard() {
+    const token = localStorage.getItem('iot_token');
+    
+    console.log('Chargement du dashboard...');
+    
+    if (!token) {
+        console.log('Pas de token, redirection');
+        window.location.href = '/';
+        return;
+    }
+    
+    try {
+        console.log('Appel API dashboard/summary...');
+        const response = await fetch(`${API_URL}/dashboard/summary`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        console.log('Réponse reçue, statut:', response.status);
+        
+        if (response.status === 401) {
+            console.log('Token invalide');
+            localStorage.removeItem('iot_token');
+            localStorage.removeItem('iot_user');
+            window.location.href = '/';
+            return;
+        }
+        
+        if (!response.ok) {
+            throw new Error('Erreur de chargement');
+        }
+        
+        const data = await response.json();
+        console.log('Données du dashboard:', data);
+        
+        // Mettre à jour les statistiques
+        document.getElementById('capteursActifs').textContent = data.capteurs_actifs || 0;
+        document.getElementById('noeudsActifs').textContent = data.noeuds_actifs || 0;
+        document.getElementById('mesures24h').textContent = data.mesures_24h || 0;
+        document.getElementById('alertesToday').textContent = data.alertes_aujourd_hui || 0;
+        
+        // Afficher les dernières mesures
+        const mesuresDiv = document.getElementById('dernieresMesures');
+        mesuresDiv.innerHTML = '';
+        
+        if (data.dernieres_mesures && data.dernieres_mesures.length > 0) {
+            data.dernieres_mesures.forEach(mesure => {
+                const card = document.createElement('div');
+                card.className = 'mesure-card';
+                card.innerHTML = `
+                    <h4>${mesure.capteur}</h4>
+                    <div class="mesure-valeur">${mesure.valeur} ${mesure.unite}</div>
+                    <p class="mesure-info">${mesure.noeud}</p>
+                    <p class="mesure-time">${new Date(mesure.timestamp).toLocaleString()}</p>
+                `;
+                mesuresDiv.appendChild(card);
+            });
+        } else {
+            mesuresDiv.innerHTML = '<p>Aucune mesure récente</p>';
+        }
+        
+        // Charger les capteurs pour le graphique
+        chargerCapteursPourGraphique();
+        
+    } catch (error) {
+        console.error('Erreur chargement dashboard:', error);
+    }
+}
+
+async function chargerCapteursPourGraphique() {
+    const token = localStorage.getItem('iot_token');
+    
+    console.log('Chargement des capteurs pour le graphique...');
+    
+    try {
+        const response = await fetch(`${API_URL}/capteurs`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        console.log('Capteurs reçus, statut:', response.status);
+        
+        const capteurs = await response.json();
+        console.log('Nombre de capteurs:', capteurs.length);
+        
+        const select = document.getElementById('capteurSelect');
+        select.innerHTML = '<option value="">Sélectionner un capteur</option>';
+        
+        capteurs.forEach(capteur => {
+            const option = document.createElement('option');
+            option.value = capteur.id;
+            option.textContent = `${capteur.nom} (${capteur.type})`;
+            select.appendChild(option);
+        });
+        
+    } catch (error) {
+        console.error('Erreur chargement capteurs:', error);
+    }
+}
+
+async function chargerGraphique() {
+    const capteurId = document.getElementById('capteurSelect').value;
+    if (!capteurId) return;
+    
+    const token = localStorage.getItem('iot_token');
+    
+    console.log('Chargement du graphique pour capteur:', capteurId);
+    
+    try {
+        const response = await fetch(`${API_URL}/mesures/historique?capteur_id=${capteurId}&intervalle=heure&limit=24`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        const data = await response.json();
+        console.log('Données historique:', data);
+        
+        // Préparer les données pour le graphique
+        const labels = data.map(d => d.periode).reverse();
+        const moyennes = data.map(d => parseFloat(d.moyenne)).reverse();
+        
+        // Détruire l'ancien graphique
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+        
+        // Créer un nouveau graphique
+        const ctx = document.getElementById('chartMesures').getContext('2d');
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Moyenne',
+                    data: moyennes,
+                    borderColor: '#4CAF50',
+                    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: true
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false
+                    }
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erreur chargement graphique:', error);
+    }
+}
+
+// Charger au démarrage
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Dashboard: DOMContentLoaded déclenché');
+    chargerDashboard();
+    
+    // Actualiser toutes les 10 secondes
+    setInterval(chargerDashboard, 10000);
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}

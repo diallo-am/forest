@@ -1,0 +1,445 @@
+{% extends "base.html" %}
+
+{% block title %}Noeuds - Système IoT{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Gestion des Noeuds IoT</h1>
+    <button class="btn btn-primary" onclick="afficherModal()"><img src="static/img/new.png" width="20px"> Nouveau Noeud</button>
+</div>
+
+<div class="filters">
+  <div class="form-group" style="margin-bottom: 0;">
+    <select id="statutFilter" onchange="chargerNoeuds()">
+        <option value="">Tous les statuts</option>
+        <option value="actif">Actif</option>
+        <option value="inactif">Inactif</option>
+        <option value="maintenance">Maintenance</option>
+        <option value="erreur">Erreur</option>
+    </select>
+  </div>
+</div>
+
+<div id="listeNoeuds" class="cards-grid"></div>
+
+<!-- Modal Ajout/Édition -->
+<div id="modalNoeud" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="fermerModal()">&times;</span>
+        <h2 id="modalTitle">Nouveau Noeud</h2>
+        
+        <form id="formNoeud" onsubmit="sauvegarderNoeud(event)">
+            <input type="hidden" id="noeudId">
+            
+            <div class="form-group">
+                <label for="nom">Nom *</label>
+                <input type="text" id="nom" required placeholder="Ex: ESP32-S3 Zone A">
+            </div>
+            
+            <div class="form-group">
+                <label for="adresse_mac">Adresse MAC *</label>
+                <input type="text" id="adresse_mac" placeholder="AA:BB:CC:DD:EE:FF" pattern="([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})" required>
+                <small>Format: XX:XX:XX:XX:XX:XX</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="adresse_ip">Adresse IP</label>
+                <input type="text" id="adresse_ip" placeholder="192.168.1.100">
+            </div>
+            
+            <div class="form-group">
+                <label for="localisation">Localisation</label>
+                <input type="text" id="localisation" placeholder="Forêt Nord, Zone A...">
+            </div>
+            
+            <div class="form-group">
+                <label for="modele">Modèle</label>
+                <input type="text" id="modele" placeholder="ESP32-S3, ESP32, Arduino...">
+            </div>
+            
+            <div class="form-group">
+                <label for="firmware_version">Version Firmware</label>
+                <input type="text" id="firmware_version" placeholder="v1.0.0">
+            </div>
+            
+            <div class="form-group">
+                <label for="statut">Statut</label>
+                <select id="statut">
+                    <option value="actif">Actif</option>
+                    <option value="inactif">Inactif</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="erreur">Erreur</option>
+                </select>
+            </div>
+            
+            <div id="apiKeyDisplay" class="api-key-display" style="display: none;">
+                <label>Clé API (notez-la, elle ne sera plus affichée)</label>
+                <div class="api-key-box">
+                    <code id="apiKeyValue"></code>
+                    <button type="button" onclick="copierApiKey()">Copier</button>
+                </div>
+            </div>
+            
+            <div class="modal-buttons">
+                <button type="button" class="btn btn-secondary" onclick="fermerModal()">Annuler</button>
+                <button type="submit" class="btn btn-primary">Enregistrer</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal Association Capteurs -->
+<div id="modalCapteurs" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="fermerModalCapteurs()">&times;</span>
+        <h2>Associer des Capteurs</h2>
+        
+        <div id="listeCapteursDispo"></div>
+        
+        <div class="modal-buttons">
+            <button class="btn btn-secondary" onclick="fermerModalCapteurs()">Fermer</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let noeudCourant = null;
+
+    async function chargerNoeuds() {
+        const token = localStorage.getItem('iot_token');
+        const statut = document.getElementById('statutFilter').value;
+        
+        let url = `${API_URL}/noeuds`;
+        if (statut) url += `?statut=${statut}`;
+        
+        try {
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Erreur chargement nœuds');
+            
+            const noeuds = await response.json();
+            const liste = document.getElementById('listeNoeuds');
+            
+            
+            if (noeuds.length === 0) {
+                liste.innerHTML = `
+                    <div class="card" style="grid-column: 1/-1;">
+                        <div class="card-body text-center">
+                            <p style="color: var(--text-muted);">Aucun nœud ne correspond aux critères</p>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            liste.innerHTML = '';
+            
+            noeuds.forEach((noeud, index) => {
+                const statutClass = {
+                    'actif': 'success',
+                    'inactif': 'inactive',
+                    'maintenance': 'warning',
+                    'erreur': 'danger'
+                }[noeud.statut] || 'inactive';
+                
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.animationDelay = `${index * 0.05}s`;
+                card.innerHTML = `
+                    <div class="card-header">
+                        <h3>${noeud.nom}</h3>
+                        <span class="badge badge-${statutClass}">${noeud.statut}</span>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>MAC:</strong> ${noeud.adresse_mac}</p>
+                        <p><strong>IP:</strong> ${noeud.adresse_ip || 'N/A'}</p>
+                        <p><strong>Localisation:</strong> ${noeud.localisation || 'N/A'}</p>
+                        <p><strong>Modèle:</strong> ${noeud.modele || 'N/A'}</p>
+                        <p><strong>Firmware:</strong> ${noeud.firmware_version || 'N/A'}</p>
+                        <p><strong>API Key:</strong> <code>${noeud.api_key}</code></p>
+                        ${noeud.derniere_connexion ? 
+                            `<p class="text-muted">Dernière connexion: ${new Date(noeud.derniere_connexion).toLocaleString('fr-FR')}</p>` : 
+                            '<p class="text-muted">Jamais connecté</p>'
+                        }
+                    </div>
+                    <div class="card-footer">
+                        <button class="btn btn-sm btn-info" onclick="gererCapteurs(${noeud.id})">Capteurs</button>
+                        <button class="btn btn-sm btn-secondary" onclick="editerNoeud(${noeud.id})">Éditer</button>
+                        <button class="btn btn-sm btn-danger" onclick="supprimerNoeud(${noeud.id})">Supprimer</button>
+                    </div>
+                `;
+                liste.appendChild(card);
+            });
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur de chargement des nœuds', 'error');
+        }
+    }
+
+    function afficherModal() {
+        document.getElementById('modalTitle').textContent = 'Nouveau Noeud';
+        document.getElementById('formNoeud').reset();
+        document.getElementById('noeudId').value = '';
+        document.getElementById('apiKeyDisplay').style.display = 'none';
+        document.getElementById('adresse_mac').disabled = false;
+        document.getElementById('modalNoeud').style.display = 'block';
+    }
+
+    function fermerModal() {
+        document.getElementById('modalNoeud').style.display = 'none';
+    }
+
+    async function editerNoeud(id) {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/noeuds/${id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) throw new Error('Nœud non trouvé');
+            
+            const noeud = await response.json();
+            
+            document.getElementById('modalTitle').textContent = 'Éditer Noeud';
+            document.getElementById('noeudId').value = noeud.id;
+            document.getElementById('nom').value = noeud.nom;
+            document.getElementById('adresse_mac').value = noeud.adresse_mac;
+            document.getElementById('adresse_mac').disabled = true;
+            document.getElementById('adresse_ip').value = noeud.adresse_ip || '';
+            document.getElementById('localisation').value = noeud.localisation || '';
+            document.getElementById('modele').value = noeud.modele || '';
+            document.getElementById('firmware_version').value = noeud.firmware_version || '';
+            document.getElementById('statut').value = noeud.statut;
+            document.getElementById('apiKeyDisplay').style.display = 'none';
+            
+            document.getElementById('modalNoeud').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur de chargement du nœud', 'error');
+        }
+    }
+
+    async function sauvegarderNoeud(event) {
+        event.preventDefault();
+        
+        const token = localStorage.getItem('iot_token');
+        const id = document.getElementById('noeudId').value;
+        
+        const data = {
+            nom: document.getElementById('nom').value,
+            adresse_ip: document.getElementById('adresse_ip').value,
+            localisation: document.getElementById('localisation').value,
+            modele: document.getElementById('modele').value,
+            firmware_version: document.getElementById('firmware_version').value,
+            statut: document.getElementById('statut').value
+        };
+        
+        if (!id) {
+            data.adresse_mac = document.getElementById('adresse_mac').value.toUpperCase();
+        }
+        
+        try {
+            const url = id ? `${API_URL}/noeuds/${id}` : `${API_URL}/noeuds`;
+            const method = id ? 'PUT' : 'POST';
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            const result = await response.json();
+            
+            if (!id && result.api_key) {
+                document.getElementById('apiKeyValue').textContent = result.api_key;
+                document.getElementById('apiKeyDisplay').style.display = 'block';
+                showNotification('Nœud créé ! Notez bien la clé API', 'success');
+            } else {
+                showNotification('Nœud mis à jour avec succès', 'success');
+                fermerModal();
+            }
+            
+            chargerNoeuds();
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+
+    async function supprimerNoeud(id) {
+        if (!confirm('Êtes-vous sûr de vouloir supprimer ce nœud ? Toutes ses mesures seront également supprimées.')) {
+            return;
+        }
+        
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/noeuds/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            showNotification('Nœud supprimé avec succès', 'success');
+            chargerNoeuds();
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+
+    function copierApiKey() {
+        const apiKey = document.getElementById('apiKeyValue').textContent;
+        navigator.clipboard.writeText(apiKey).then(() => {
+            showNotification('Clé API copiée dans le presse-papier', 'success');
+        }).catch(() => {
+            showNotification('Erreur lors de la copie', 'error');
+        });
+    }
+
+    async function gererCapteurs(noeudId) {
+        noeudCourant = noeudId;
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const responseCapteurs = await fetch(`${API_URL}/capteurs?actif=true`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!responseCapteurs.ok) throw new Error('Erreur chargement capteurs');
+            
+            const capteurs = await responseCapteurs.json();
+            
+            const responseNoeud = await fetch(`${API_URL}/noeuds/${noeudId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!responseNoeud.ok) throw new Error('Erreur chargement nœud');
+            
+            const noeud = await responseNoeud.json();
+            const capteursAssocies = noeud.capteurs ? noeud.capteurs.split(', ') : [];
+            
+            const liste = document.getElementById('listeCapteursDispo');
+            liste.innerHTML = '<h3 style="margin-bottom: 1rem;">Capteurs Disponibles</h3>';
+            
+            if (capteurs.length === 0) {
+                liste.innerHTML += '<p style="color: var(--text-muted);">Aucun capteur disponible</p>';
+            } else {
+                capteurs.forEach(capteur => {
+                    const estAssocie = capteursAssocies.includes(capteur.nom);
+                    const div = document.createElement('div');
+                    div.className = 'capteur-item';
+                    div.innerHTML = `
+                        <span>${capteur.nom} (${capteur.type})</span>
+                        <button class="btn btn-sm ${estAssocie ? 'btn-danger' : 'btn-primary'}" 
+                                onclick="${estAssocie ? `dissocier(${capteur.id})` : `associer(${capteur.id})`}">
+                            ${estAssocie ? 'Dissocier' : 'Associer'}
+                        </button>
+                    `;
+                    liste.appendChild(div);
+                });
+            }
+            
+            document.getElementById('modalCapteurs').style.display = 'block';
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur de chargement des capteurs', 'error');
+        }
+    }
+
+    async function associer(capteurId) {
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/noeuds/${noeudCourant}/capteurs/${capteurId}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            showNotification('Capteur associé avec succès', 'success');
+            gererCapteurs(noeudCourant);
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+
+    async function dissocier(capteurId) {
+        if (!confirm('Êtes-vous sûr de vouloir dissocier ce capteur ?')) {
+            return;
+        }
+        
+        const token = localStorage.getItem('iot_token');
+        
+        try {
+            const response = await fetch(`${API_URL}/noeuds/${noeudCourant}/capteurs/${capteurId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Erreur serveur');
+            }
+            
+            showNotification('Capteur dissocié avec succès', 'success');
+            gererCapteurs(noeudCourant);
+            
+        } catch (error) {
+            console.error('Erreur:', error);
+            showNotification('Erreur: ' + error.message, 'error');
+        }
+    }
+    
+    function fermerModalCapteurs() {
+        document.getElementById('modalCapteurs').style.display = 'none';
+        chargerNoeuds();
+    }
+
+    // Fermer les modals en cliquant à l'extérieur
+    window.onclick = function(event) {
+        const modalNoeud = document.getElementById('modalNoeud');
+        const modalCapteurs = document.getElementById('modalCapteurs');
+        
+        if (event.target == modalNoeud) {
+            fermerModal();
+        }
+        if (event.target == modalCapteurs) {
+            fermerModalCapteurs();
+        }
+    }
+
+    // Charger au démarrage
+    document.addEventListener('DOMContentLoaded', () => {
+        chargerNoeuds();
+    });
+</script>
+{% endblock %}

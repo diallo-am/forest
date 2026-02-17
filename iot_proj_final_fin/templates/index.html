@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connexion - Système IoT</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-page">
+    <div class="login-container">
+        <div class="login-box">
+            <h1><img src="static/img/iot(2).png" width="30px"> Système IoT</h1>
+            <h2>Connexion</h2>
+            
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">Nom d'utilisateur</label>
+                    <input type="text" id="username" name="username" value="admin" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Mot de passe</label>
+                    <input type="password" id="password" name="password" value="admin" required>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Se connecter</button>
+                
+                <div id="loginError" class="error-message" style="display: none;"></div>
+            </form>
+            
+            <div class="login-info">
+                <p><small>Identifiants par défaut: admin / admin</small></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin + '/api';
+
+        // NE PAS rediriger automatiquement depuis la page de login
+        // Supprimer tout token invalide au chargement
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('Page de login chargée');
+        });
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('loginError');
+            
+            errorDiv.style.display = 'none';
+            
+            console.log('Tentative de connexion pour:', username);
+            
+            try {
+                const response = await fetch(`${API_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                console.log('Statut réponse:', response.status);
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Erreur de connexion');
+                }
+                
+                const data = await response.json();
+                console.log('Connexion réussie, token reçu');
+                
+                // Stocker le token et les infos utilisateur
+                localStorage.setItem('iot_token', data.token);
+                localStorage.setItem('iot_user', JSON.stringify(data.user));
+                
+                console.log('Token stocké:', localStorage.getItem('iot_token').substring(0, 20) + '...');
+                
+                // Rediriger vers le dashboard
+                window.location.href = '/dashboard';
+                
+            } catch (error) {
+                console.error('Erreur de connexion:', error);
+                errorDiv.textContent = error.message || 'Erreur de connexion au serveur';
+                errorDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
